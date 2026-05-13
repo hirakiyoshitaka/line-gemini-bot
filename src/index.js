@@ -24,6 +24,7 @@ const lineClient = new messagingApi.MessagingApiClient({
 
 const genAI = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 const handledWebhookEventIds = new Set();
+const inFlightWebhookEventIds = new Set();
 
 function hasEnv(value) {
   return value ? 'set' : 'missing';
@@ -58,6 +59,7 @@ function rememberWebhookEvent(webhookEventId) {
   if (!webhookEventId) return;
 
   handledWebhookEventIds.add(webhookEventId);
+  inFlightWebhookEventIds.delete(webhookEventId);
   if (handledWebhookEventIds.size > 1000) {
     const oldestId = handledWebhookEventIds.values().next().value;
     handledWebhookEventIds.delete(oldestId);
@@ -101,14 +103,13 @@ async function handleEvent(event) {
   });
 
   if (event.webhookEventId && handledWebhookEventIds.has(event.webhookEventId)) {
-    console.warn('同一Webhookイベントの再処理をスキップ:', { eventId });
+    console.warn('処理済みWebhookイベントの再処理をスキップ:', { eventId, isRedelivery });
     return { eventId, status: 'skipped_duplicate' };
   }
 
-  if (isRedelivery) {
-    console.warn('LINE再送イベントのため返信をスキップ:', { eventId });
-    rememberWebhookEvent(event.webhookEventId);
-    return { eventId, status: 'skipped_redelivery' };
+  if (event.webhookEventId && inFlightWebhookEventIds.has(event.webhookEventId)) {
+    console.warn('処理中Webhookイベントの再処理をスキップ:', { eventId, isRedelivery });
+    return { eventId, status: 'skipped_in_flight' };
   }
 
   if (event.type !== 'message' || event.message.type !== 'text') {
@@ -124,6 +125,7 @@ async function handleEvent(event) {
 
   const userText = event.message.text;
   console.log('テキストメッセージ受信:', { eventId, textLength: userText.length });
+  if (event.webhookEventId) inFlightWebhookEventIds.add(event.webhookEventId);
 
   let replyText;
   try {
