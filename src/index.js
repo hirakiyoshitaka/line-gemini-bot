@@ -121,26 +121,42 @@ function normalizeReplyText(text) {
   return normalized.length > 5000 ? `${normalized.slice(0, 4990)}\n...` : normalized;
 }
 
-function isShortJapaneseText(text) {
+function isExplanationRequest(text) {
   const trimmed = text.trim();
-  return trimmed.length > 0 && trimmed.length <= 40 && /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u.test(trimmed);
+  if (!trimmed) return false;
+
+  return [
+    /意味.*(教えて|知りたい|説明して)/u,
+    /(英語|英文).*(なんて言う|どう言う|教えて|訳して)/u,
+    /(この言葉|この単語|この表現|言葉|単語|表現).*(説明して|解説して)/u,
+    /例文.*(作って|ください|ちょうだい|教えて)/u,
+    /(翻訳して|訳して|和訳して|英訳して)/u,
+    /文法.*(教えて|説明して|解説して)/u,
+  ].some((pattern) => pattern.test(trimmed));
 }
 
 function buildAiPrompt(userMessage) {
   const lineStyleGuide = [
     'LINEのチャットで読みやすい日本語で返してください。',
     'Markdown記法は使わないでください。###、####、**太字**、>引用記号は禁止です。',
-    `返信は${LINE_REPLY_MAX_LENGTH}文字以内を目安に、短く要点だけにしてください。`,
   ];
 
-  if (isShortJapaneseText(userMessage)) {
+  if (isExplanationRequest(userMessage)) {
     lineStyleGuide.push(
-      'ユーザーの短い日本語について、必ず次の4項目だけで返してください。',
+      `辞書・解説モードとして、${LINE_REPLY_MAX_LENGTH}文字以内で返してください。`,
+      '次の4項目だけを使ってください。',
       '【意味】',
       '【英語で言うと】',
       '【例文】',
       '【ひとこと】',
       '各項目は1から2文で簡潔にしてください。'
+    );
+  } else {
+    lineStyleGuide.push(
+      '普段の会話として自然に返してください。',
+      '【意味】【英語で言うと】【例文】【ひとこと】などの見出しは絶対に使わないでください。',
+      '返信は1から3文で短くしてください。',
+      'ユーザーの気持ちや状況を受け止め、必要なら軽く次の一言を添えてください。'
     );
   }
 
