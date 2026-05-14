@@ -15,10 +15,6 @@ const {
 
 const AI_PROVIDER = 'Google Gemini';
 const LINE_REPLY_MAX_LENGTH = 800;
-const NORMAL_REPLY_MAX_LENGTH = 200;
-const NORMAL_MAX_OUTPUT_TOKENS = 160;
-const DETAILED_MAX_OUTPUT_TOKENS = 512;
-const AI_TEMPERATURE = 0.7;
 
 if (!LINE_CHANNEL_SECRET || !LINE_CHANNEL_ACCESS_TOKEN) {
   console.error('ERROR: .env の LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN を設定してください');
@@ -139,19 +135,11 @@ function isExplanationRequest(text) {
   ].some((pattern) => pattern.test(trimmed));
 }
 
-function isDetailedReplyRequest(text) {
-  const trimmed = text.trim();
-  if (!trimmed) return false;
-
-  return /(詳しく|詳しい|具体的に|手順|理由|なぜ|どうして|どうやって|方法|整理して|まとめて|長め)/u.test(trimmed);
-}
-
 function buildAiPrompt(userMessage) {
   const lineStyleGuide = [
     'あなたはLINEで自然に会話する相棒AIです。',
     '友達より少し丁寧、店員よりずっと自然な日本語で返してください。',
     'Markdown記法は使わないでください。###、####、**太字**、>引用記号、長い箇条書きは禁止です。',
-    'まず結論から即答してください。',
   ];
 
   if (isExplanationRequest(userMessage)) {
@@ -166,8 +154,7 @@ function buildAiPrompt(userMessage) {
     );
   } else {
     lineStyleGuide.push(
-      `普段の会話として、原則1から2文、${NORMAL_REPLY_MAX_LENGTH}文字以内を目安に短く返してください。`,
-      '長い説明は禁止です。ユーザーが「詳しく」「具体的に」などと頼んだ時だけ少し長めに返してください。',
+      '普段の会話として、1から3文で短く返してください。',
       '丁寧すぎる接客口調、薄い励まし、上から目線を避けてください。',
       '「ですね」「頑張りますね」「お気持ちわかります」を多用しないでください。',
       '【意味】【英語で言うと】【例文】【ひとこと】などの見出しは絶対に使わないでください。',
@@ -184,7 +171,7 @@ function buildAiPrompt(userMessage) {
   return `${lineStyleGuide.join('\n')}\n\nユーザーのメッセージ:\n${userMessage}`;
 }
 
-function formatLineReply(text, maxLength = LINE_REPLY_MAX_LENGTH) {
+function formatLineReply(text) {
   const fallbackText = 'すみません、応答を生成できませんでした。もう一度試してください。';
   const cleaned = normalizeReplyText(text)
     .replace(/^#{1,6}\s*/gm, '')
@@ -194,8 +181,8 @@ function formatLineReply(text, maxLength = LINE_REPLY_MAX_LENGTH) {
     .replace(/\n{3,}/g, '\n\n')
     .trim();
   const lineText = cleaned || fallbackText;
-  return lineText.length > maxLength
-    ? `${lineText.slice(0, maxLength - 4).trimEnd()}\n...`
+  return lineText.length > LINE_REPLY_MAX_LENGTH
+    ? `${lineText.slice(0, LINE_REPLY_MAX_LENGTH - 4).trimEnd()}\n...`
     : lineText;
 }
 
@@ -215,43 +202,27 @@ async function askGemini(userMessage) {
     throw new Error('GEMINI_API_KEY is missing or empty');
   }
 
-  const isLongReplyAllowed = isExplanationRequest(userMessage) || isDetailedReplyRequest(userMessage);
-  const maxOutputTokens = isLongReplyAllowed ? DETAILED_MAX_OUTPUT_TOKENS : NORMAL_MAX_OUTPUT_TOKENS;
-  const replyMaxLength = isLongReplyAllowed ? LINE_REPLY_MAX_LENGTH : NORMAL_REPLY_MAX_LENGTH;
-  const startedAt = Date.now();
-
   console.log('AI呼び出し開始:', {
     aiProvider: AI_PROVIDER,
     aiModel: AI_MODEL,
     inputTextLength: userMessage.length,
     timeoutMs: Number(AI_TIMEOUT_MS),
-    startedAt: new Date(startedAt).toISOString(),
-    maxOutputTokens,
-    temperature: AI_TEMPERATURE,
   });
 
+  const startedAt = Date.now();
   const response = await genAI.models.generateContent({
     model: AI_MODEL,
     contents: buildAiPrompt(userMessage),
-    config: {
-      maxOutputTokens,
-      temperature: AI_TEMPERATURE,
-    },
   });
-  const completedAt = Date.now();
-  const replyText = formatLineReply(response.text, replyMaxLength);
 
-  console.log('AI呼び出し完了:', {
+  console.log('AI呼び出し成功:', {
     aiProvider: AI_PROVIDER,
     aiModel: AI_MODEL,
-    startedAt: new Date(startedAt).toISOString(),
-    completedAt: new Date(completedAt).toISOString(),
-    AI応答時間ms: completedAt - startedAt,
-    返信文字数: replyText.length,
-    rawOutputTextLength: String(response.text ?? '').length,
+    elapsedMs: Date.now() - startedAt,
+    outputTextLength: String(response.text ?? '').length,
   });
 
-  return replyText;
+  return formatLineReply(response.text);
 }
 
 async function handleEvent(event) {
