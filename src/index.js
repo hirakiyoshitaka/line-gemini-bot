@@ -14,6 +14,7 @@ const {
 } = process.env;
 
 const AI_PROVIDER = 'Google Gemini';
+const LINE_REPLY_MAX_LENGTH = 800;
 
 if (!LINE_CHANNEL_SECRET || !LINE_CHANNEL_ACCESS_TOKEN) {
   console.error('ERROR: .env の LINE_CHANNEL_SECRET, LINE_CHANNEL_ACCESS_TOKEN を設定してください');
@@ -120,6 +121,47 @@ function normalizeReplyText(text) {
   return normalized.length > 5000 ? `${normalized.slice(0, 4990)}\n...` : normalized;
 }
 
+function isShortJapaneseText(text) {
+  const trimmed = text.trim();
+  return trimmed.length > 0 && trimmed.length <= 40 && /[\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Han}]/u.test(trimmed);
+}
+
+function buildAiPrompt(userMessage) {
+  const lineStyleGuide = [
+    'LINEのチャットで読みやすい日本語で返してください。',
+    'Markdown記法は使わないでください。###、####、**太字**、>引用記号は禁止です。',
+    `返信は${LINE_REPLY_MAX_LENGTH}文字以内を目安に、短く要点だけにしてください。`,
+  ];
+
+  if (isShortJapaneseText(userMessage)) {
+    lineStyleGuide.push(
+      'ユーザーの短い日本語について、必ず次の4項目だけで返してください。',
+      '【意味】',
+      '【英語で言うと】',
+      '【例文】',
+      '【ひとこと】',
+      '各項目は1から2文で簡潔にしてください。'
+    );
+  }
+
+  return `${lineStyleGuide.join('\n')}\n\nユーザーのメッセージ:\n${userMessage}`;
+}
+
+function formatLineReply(text) {
+  const fallbackText = 'すみません、応答を生成できませんでした。もう一度試してください。';
+  const cleaned = normalizeReplyText(text)
+    .replace(/^#{1,6}\s*/gm, '')
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/^\s*>\s?/gm, '')
+    .replace(/```+/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+  const lineText = cleaned || fallbackText;
+  return lineText.length > LINE_REPLY_MAX_LENGTH
+    ? `${lineText.slice(0, LINE_REPLY_MAX_LENGTH - 4).trimEnd()}\n...`
+    : lineText;
+}
+
 function withTimeout(promise, timeoutMs, label) {
   let timeoutId;
   const timeout = new Promise((_, reject) => {
@@ -146,7 +188,7 @@ async function askGemini(userMessage) {
   const startedAt = Date.now();
   const response = await genAI.models.generateContent({
     model: AI_MODEL,
-    contents: userMessage,
+    contents: buildAiPrompt(userMessage),
   });
 
   console.log('AI呼び出し成功:', {
@@ -156,7 +198,7 @@ async function askGemini(userMessage) {
     outputTextLength: String(response.text ?? '').length,
   });
 
-  return normalizeReplyText(response.text);
+  return formatLineReply(response.text);
 }
 
 async function handleEvent(event) {
@@ -222,13 +264,13 @@ async function handleEvent(event) {
   try {
     console.log('LINE返信開始:', {
       eventId,
-      replyTextLength: normalizeReplyText(replyText).length,
+      replyTextLength: formatLineReply(replyText).length,
       hasReplyToken: Boolean(event.replyToken),
     });
 
     await lineClient.replyMessage({
       replyToken: event.replyToken,
-      messages: [{ type: 'text', text: normalizeReplyText(replyText) }],
+      messages: [{ type: 'text', text: formatLineReply(replyText) }],
     });
 
     console.log('LINE返信成功:', { eventId });
